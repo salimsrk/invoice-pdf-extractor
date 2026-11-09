@@ -100,7 +100,7 @@ def extract_with_llm(text: str, inv: Invoice) -> Invoice:
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"responseMimeType": "application/json"},
     }).encode()
-    model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    model = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
     try:
         req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
