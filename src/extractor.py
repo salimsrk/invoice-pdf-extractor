@@ -24,6 +24,40 @@ AMOUNT = r"([\d,]+\.\d{2})"
 REQUIRED = ["invoice_no", "invoice_date", "seller", "grand_total"]
 
 
+RETRYABLE = {429, 500, 502, 503, 504}
+
+
+def _gemini_models() -> list[str]:
+    """Preferred model first, then a lighter backup (both are Google's auto-updated aliases)."""
+    first = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
+    return list(dict.fromkeys([first, "gemini-flash-latest", "gemini-flash-lite-latest"]))
+
+
+def _gemini_call(body: bytes, key: str) -> dict:
+    """POST to Gemini with retries on busy/overloaded errors and fallback to a backup model."""
+    import time
+    import urllib.error
+    last_err = None
+    for model in _gemini_models():
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        for attempt in range(3):
+            req = urllib.request.Request(url, data=body, headers={
+                "Content-Type": "application/json", "x-goog-api-key": key})
+            try:
+                with urllib.request.urlopen(req, timeout=60) as r:
+                    return json.loads(r.read())
+            except urllib.error.HTTPError as e:
+                last_err = e
+                if e.code in RETRYABLE:
+                    time.sleep(2 * (attempt + 1))  # 2s, 4s, 6s
+                    continue
+                break  # 404 / 400 etc: try the next model
+            except urllib.error.URLError as e:
+                last_err = e
+                time.sleep(2)
+    raise RuntimeError(f"Gemini unavailable after retries ({last_err})")
+
+
 @dataclass
 class LineItem:
     description: str
@@ -100,12 +134,8 @@ def extract_with_llm(text: str, inv: Invoice) -> Invoice:
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"responseMimeType": "application/json"},
     }).encode()
-    model = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
     try:
-        req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=60) as r:
-            data = json.loads(r.read())
+        data = _gemini_call(body, key)
         fields = json.loads(data["candidates"][0]["content"]["parts"][0]["text"])
     except Exception as e:  # network / quota / parse errors shouldn't crash the batch
         inv.issues.append(f"LLM fallback failed: {e}")
