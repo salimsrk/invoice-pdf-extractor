@@ -29,8 +29,8 @@ RETRYABLE = {429, 500, 502, 503, 504}
 
 def _gemini_models() -> list[str]:
     """Preferred model first, then a lighter backup (both are Google's auto-updated aliases)."""
-    first = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
-    return list(dict.fromkeys([first, "gemini-flash-latest", "gemini-flash-lite-latest"]))
+    first = os.getenv("GEMINI_MODEL", "gemini-flash-lite-latest")  # lite = fastest, fine for this task
+    return list(dict.fromkeys([first, "gemini-flash-lite-latest", "gemini-flash-latest"]))
 
 
 def _gemini_call(body: bytes, key: str) -> dict:
@@ -44,7 +44,7 @@ def _gemini_call(body: bytes, key: str) -> dict:
             req = urllib.request.Request(url, data=body, headers={
                 "Content-Type": "application/json", "x-goog-api-key": key})
             try:
-                with urllib.request.urlopen(req, timeout=60) as r:
+                with urllib.request.urlopen(req, timeout=25) as r:
                     return json.loads(r.read())
             except urllib.error.HTTPError as e:
                 last_err = e
@@ -52,9 +52,9 @@ def _gemini_call(body: bytes, key: str) -> dict:
                     time.sleep(2 * (attempt + 1))  # 2s, 4s, 6s
                     continue
                 break  # 404 / 400 etc: try the next model
-            except urllib.error.URLError as e:
-                last_err = e
-                time.sleep(2)
+            except (urllib.error.URLError, TimeoutError, OSError) as e:
+                last_err = e  # timeout / network: slow model, move on to the next one
+                break
     raise RuntimeError(f"Gemini unavailable after retries ({last_err})")
 
 
